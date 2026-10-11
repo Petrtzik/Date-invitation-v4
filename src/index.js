@@ -3,34 +3,28 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Serve the invitation website
     if (url.pathname !== "/api/confirm") {
       return env.ASSETS.fetch(request);
     }
 
-    // Only POST requests are allowed
     if (request.method !== "POST") {
-      return new Response("Method not allowed", {
-        status: 405
-      });
+      return new Response("Method not allowed", { status: 405 });
     }
 
-    // Check notification configuration
-    if (!env.NTFY_TOPIC || !env.NTFY_TOPIC.trim()) {
+    const topic = env.NTFY_TOPIC?.trim();
+
+    if (!topic) {
       return new Response("Notification not configured", {
         status: 503
       });
     }
 
-    // Read and validate the request
     let details;
 
     try {
       details = await request.json();
     } catch {
-      return new Response("Invalid JSON", {
-        status: 400
-      });
+      return new Response("Invalid JSON", { status: 400 });
     }
 
     const { activity, date, time } = details || {};
@@ -56,9 +50,7 @@ export default {
 
     try {
       const response = await fetch(
-        `https://ntfy.sh/${encodeURIComponent(
-          env.NTFY_TOPIC.trim()
-        )}`,
+        `https://ntfy.sh/${encodeURIComponent(topic)}`,
         {
           method: "POST",
           headers: {
@@ -70,16 +62,31 @@ export default {
         }
       );
 
-      if (!response.ok) {
-        console.error(
-          "ntfy rejected request:",
-          response.status
-        );
+      if (response.status === 429) {
+        const retryAfter = response.headers.get("Retry-After");
+        const errorBody = (await response.text()).slice(0, 500);
 
-        return new Response(
-          `Notification service error: ${response.status}`,
-          { status: 502 }
-        );
+        console.error("ntfy rate limit:", {
+          status: 429,
+          retryAfter,
+          details: errorBody
+        });
+
+        return Response.json({
+          success: false,
+          message: "Notification temporarily unavailable. Please try later."
+        }, {
+          status: 503,
+          headers: { "Cache-Control": "no-store" }
+        });
+      }
+
+      if (!response.ok) {
+        console.error("ntfy error:", response.status);
+
+        return new Response("Notification service error", {
+          status: 502
+        });
       }
 
       return Response.json({
@@ -88,15 +95,11 @@ export default {
       });
 
     } catch (error) {
-      console.error(
-        "Notification delivery error:",
-        error
-      );
+      console.error("Notification delivery error:", error);
 
-      return new Response(
-        "Could not connect to notification service",
-        { status: 502 }
-      );
+      return new Response("Notification service unavailable", {
+        status: 502
+      });
     }
   }
 };
